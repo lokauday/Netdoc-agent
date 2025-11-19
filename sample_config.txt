@@ -1,0 +1,14 @@
+show version
+Cisco IOS Software, C2960X-UNIVERSALK9-M, Version 15.2(2)E7
+System serial number: FOC1234X1CD
+
+show vlan brief
+10   USERS       active
+20   SERVERS     active
+
+show ip interface brief
+Vlan10     10.0.10.1   up    up
+Vlan20     10.0.20.1   up    up
+
+show cdp neighbors
+CORE1  Gig1/0/1   Gig0/1
