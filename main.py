@@ -7,10 +7,12 @@ from openai import OpenAI
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+
 def read_file(path: str) -> str:
     """Read a text file and return its content."""
     with open(path, "r") as f:
         return f.read()
+
 
 def build_prompt(config_text: str) -> str:
     """Build the prompt we send to the AI."""
@@ -22,10 +24,9 @@ You will be given raw CLI outputs from one or more Cisco switches/routers, inclu
 - show vlan brief
 - show ip interface brief
 - show cdp neighbors
+- show lldp neighbors
 - show version
-
-The CLI from multiple devices may be concatenated and separated by markers like:
-# FILE: access-switch-1.txt
+- show ip route (if present)
 
 From this, produce a STRICT JSON object with the following keys:
 
@@ -65,17 +66,27 @@ From this, produce a STRICT JSON object with the following keys:
   "total_routes": integer or null
 }},
 
+"security_findings": [
+  {{
+    "issue": "Example: VTY lines use password-only authentication",
+    "severity": "low/medium/high/critical",
+    "recommendation": "Example: Use AAA with local or TACACS+ users"
+  }}
+],
+
 "ascii_topology": "Simple ASCII art drawing of the topology using device names and interfaces."
 
 Rules:
 - Infer reasonable values when possible.
 - If information is missing, use null or empty values.
+- For security_findings, look for obvious things: weak or plain-text passwords, lack of AAA, no logging, no BPDU guard, default VLAN usage, unused open interfaces, etc.
 - Return ONLY valid JSON text. No comments, no markdown, no extra text.
 
 CONFIG_START
 {config_text}
 CONFIG_END
 """
+
 
 def call_openai(prompt: str) -> str:
     """Call OpenAI using chat.completions and return the JSON text."""
@@ -84,8 +95,9 @@ def call_openai(prompt: str) -> str:
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
-    # Assistant reply content (should be pure JSON text)
+    # The assistant's reply content (should be pure JSON text)
     return response.choices[0].message.content
+
 
 def build_markdown_report(data: dict) -> str:
     """Turn the parsed JSON into a markdown documentation report."""
@@ -94,6 +106,7 @@ def build_markdown_report(data: dict) -> str:
     interfaces = data.get("interfaces", []) or []
     neighbors = data.get("neighbors", []) or []
     routing = data.get("routing_summary", {}) or {}
+    security = data.get("security_findings", []) or []
     ascii_topology = data.get("ascii_topology", "") or ""
 
     md = []
@@ -110,8 +123,8 @@ def build_markdown_report(data: dict) -> str:
     # VLANs
     md.append("## VLANs")
     if vlans:
-        md.append("| VLAN ID | Name   | Ports |")
-        md.append("|--------|--------|-------|")
+        md.append("| VLAN ID | Name | Ports |")
+        md.append("|--------|------|-------|")
         for v in vlans:
             ports = ", ".join(v.get("ports", []) or [])
             md.append(f"| {v.get('vlan_id','')} | {v.get('name','')} | {ports} |")
@@ -155,6 +168,16 @@ def build_markdown_report(data: dict) -> str:
     md.append(f"- Default Route: {routing.get('default_route','')}")
     md.append(f"- Total Routes: {routing.get('total_routes','')}")
 
+    # Security findings
+    md.append("\n## Security Findings")
+    if security:
+        for finding in security:
+            md.append(f"- **Issue:** {finding.get('issue','')}")
+            md.append(f"  - Severity: **{finding.get('severity','')}**")
+            md.append(f"  - Recommendation: {finding.get('recommendation','')}\n")
+    else:
+        md.append("_No obvious security issues detected (based on config provided)._")
+
     # ASCII topology
     md.append("\n## Topology (ASCII View)")
     if ascii_topology:
@@ -166,16 +189,23 @@ def build_markdown_report(data: dict) -> str:
 
     return "\n".join(md)
 
+
 if __name__ == "__main__":
-    # CLI test: read sample_config.txt if you want
-    if os.path.exists("sample_config.txt"):
-        config_text = read_file("sample_config.txt")
-        prompt = build_prompt(config_text)
-        json_text = call_openai(prompt)
-        data = json.loads(json_text)
-        md_report = build_markdown_report(data)
-        with open("report.md", "w", encoding="utf-8") as f:
-            f.write(md_report)
-        print("✅ Documentation generated: report.md")
-    else:
-        print("sample_config.txt not found. Use the Streamlit UI instead.")
+    # 1) Read your sample config
+    config_text = read_file("sample_config.txt")
+
+    # 2) Build prompt and call OpenAI
+    prompt = build_prompt(config_text)
+    json_text = call_openai(prompt)
+
+    # 3) Parse JSON text to dict
+    data = json.loads(json_text)
+
+    # 4) Build markdown report
+    md_report = build_markdown_report(data)
+
+    # 5) Save to file
+    with open("report.md", "w", encoding="utf-8") as f:
+        f.write(md_report)
+
+    print("✅ Documentation generated: report.md")
