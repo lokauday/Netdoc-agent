@@ -1,49 +1,53 @@
 import os
 import json
-import textwrap
 import streamlit as st
 from openai import OpenAI
 from utils.parser import parse_config
 from fpdf import FPDF
+import textwrap
 
 # ----------- LOAD API KEY FROM SECRETS OR LOCAL ENV -----------
-# Priority: Streamlit secrets if deployed, otherwise .env in local dev.
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
 # ----------- PDF GENERATOR (FPDF – Works on Streamlit Cloud) -----------
-def generate_pdf(report_dict: dict) -> bytes:
+def generate_pdf(json_data):
     """
-    Convert a nested dictionary into a PDF.
-    The function prettifies the JSON, wraps long lines to a safe width,
-    and breaks extremely long tokens into smaller pieces so that FPDF can render them.
+    Convert parsed JSON data into a PDF. Long words are broken up and lines are
+    wrapped safely so that FPDF never encounters a word that is wider than the page.
     """
-    # Prettify the dict to JSON string with indentation and newlines
-    json_text = json.dumps(report_dict, indent=2)
+    # Pretty-print JSON
+    text = json.dumps(json_data, indent=2)
 
-    # Create the PDF
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.set_font("Courier", size=10)  # monospaced font improves alignment
+    pdf.set_font("Courier", size=10)  # monospace helps readability
 
-    # Process each line in the prettified JSON
-    for line in json_text.splitlines():
-        # Break any single token that is too long (no spaces) into chunks of 50 characters
-        tokens = []
-        for token in line.split(" "):
-            if len(token) > 50:
-                tokens.extend([token[i:i+50] for i in range(0, len(token), 50)])
+    for line in text.split("\n"):
+        # break up any extremely long 'word' (sequence without spaces)
+        safe_words = []
+        for word in line.split(" "):
+            if len(word) > 80:
+                # split long words into segments of 80 characters
+                segments = [word[i:i+80] for i in range(0, len(word), 80)]
+                safe_words.append(" ".join(segments))
             else:
-                tokens.append(token)
-        safe_line = " ".join(tokens)
+                safe_words.append(word)
+        safe_line = " ".join(safe_words)
 
-        # Wrap the line to about 90 characters; adjust width for page margins
-        wrapped_lines = textwrap.wrap(safe_line, width=90) or [""]
-        for wrapped in wrapped_lines:
-            pdf.multi_cell(0, 5, wrapped)
-
-    # Return PDF bytes
+        # wrap lines so they fit the PDF page; allow breaking long words
+        wrapped_lines = textwrap.wrap(
+            safe_line,
+            width=90,
+            break_long_words=True,
+            break_on_hyphens=False
+        )
+        if not wrapped_lines:
+            pdf.ln(5)
+        else:
+            for wrap_line in wrapped_lines:
+                pdf.multi_cell(0, 5, wrap_line)
     return pdf.output(dest="S").encode("latin-1")
 
 # ---------------- STREAMLIT UI ----------------
@@ -64,18 +68,16 @@ if st.button("Generate Documentation") and uploaded_files:
         combined += f"\n\n# FILE: {f.name}\n"
         combined += f.read().decode("utf-8")
 
-    with st.spinner("Analyzing configuration…"):
+    with st.spinner("Analyzing configuration..."):
         result = parse_config(combined)
 
     st.success("Report generated successfully!")
     st.json(result)
 
-    # Convert report dictionary into a PDF using the robust generator
+    # Generate the PDF from the parsed result and provide a download button
     pdf_bytes = generate_pdf(result)
-
-    # Allow user to download the report
     st.download_button(
-        label="📥 Download PDF Report",
+        "📥 Download PDF Report",
         data=pdf_bytes,
         file_name="Network_Documentation_Report.pdf",
         mime="application/pdf"
