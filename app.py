@@ -1,5 +1,4 @@
 import os
-import json
 import streamlit as st
 from openai import OpenAI
 from utils.parser import parse_config
@@ -10,48 +9,56 @@ import textwrap
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-# ----------- PDF GENERATOR (FPDF – Works on Streamlit Cloud) -----------
-def generate_pdf(json_data):
-    """
-    Convert parsed JSON data into a PDF. Long words are broken up and lines are
-    wrapped safely so that FPDF never encounters a word that is wider than the page.
-    """
-    # Pretty-print JSON
-    text = json.dumps(json_data, indent=2)
-
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Courier", size=10)  # monospace helps readability
-
-    for line in text.split("\n"):
-        # break up any extremely long 'word' (sequence without spaces)
-        safe_words = []
-        for word in line.split(" "):
-            if len(word) > 80:
-                # split long words into segments of 80 characters
-                segments = [word[i:i+80] for i in range(0, len(word), 80)]
-                safe_words.append(" ".join(segments))
+# ----------- Helpers to turn dict -> lines and split long words -----------
+def dict_to_lines(data, indent=0):
+    """Convert nested dict/list structures into a list of lines."""
+    lines = []
+    indent_str = " " * (indent * 2)
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                lines.append(f"{indent_str}{key}:")
+                lines.extend(dict_to_lines(value, indent + 1))
             else:
-                safe_words.append(word)
-        safe_line = " ".join(safe_words)
+                lines.append(f"{indent_str}{key}: {value}")
+    elif isinstance(data, list):
+        for idx, item in enumerate(data):
+            lines.append(f"{indent_str}-")
+            lines.extend(dict_to_lines(item, indent + 1))
+    else:
+        lines.append(f"{indent_str}{data}")
+    return lines
 
-        # wrap lines so they fit the PDF page; allow breaking long words
-        wrapped_lines = textwrap.wrap(
-            safe_line,
-            width=90,
-            break_long_words=True,
-            break_on_hyphens=False
-        )
-        if not wrapped_lines:
-            pdf.ln(5)
+def split_long_words(text, length=40):
+    """Insert spaces into long continuous words."""
+    result = []
+    for word in text.split(" "):
+        if len(word) > length:
+            # break the word into chunks of 'length' characters
+            chunks = [word[i:i+length] for i in range(0, len(word), length)]
+            result.append(" ".join(chunks))
         else:
-            for wrap_line in wrapped_lines:
-                pdf.multi_cell(0, 5, wrap_line)
+            result.append(word)
+    return " ".join(result)
+
+def generate_pdf(data):
+    """Create a PDF from the nested dict/list structure."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Courier", size=10)
+
+    lines = dict_to_lines(data)
+    for line in lines:
+        # Break long words and then wrap
+        safe_line = split_long_words(line, length=40)
+        wrapped_lines = textwrap.wrap(safe_line, width=50, break_long_words=False)
+        for seg in wrapped_lines:
+            pdf.multi_cell(0, 6, seg)
+    # Return bytes
     return pdf.output(dest="S").encode("latin-1")
 
 # ---------------- STREAMLIT UI ----------------
-
 st.set_page_config(page_title="NetDoc AI", layout="wide")
 st.title("⚡ Network Documentation AI Agent")
 st.write("Upload your switch/router configs and generate automated documentation.")
@@ -74,7 +81,7 @@ if st.button("Generate Documentation") and uploaded_files:
     st.success("Report generated successfully!")
     st.json(result)
 
-    # Generate the PDF from the parsed result and provide a download button
+    # Generate PDF
     pdf_bytes = generate_pdf(result)
     st.download_button(
         "📥 Download PDF Report",
