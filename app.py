@@ -1,46 +1,92 @@
 import os
 import json
-import textwrap
 import streamlit as st
 from openai import OpenAI
 from utils.parser import parse_config
 from fpdf import FPDF
 
-# ----------- LOAD API KEY FROM SECRETS OR LOCAL ENV -----------
 
+# ---------- LOAD OPENAI KEY ----------
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-# ----------- SAFE PDF GENERATOR (NO ERRORS, WORKS ON CLOUD) -----------
 
+# ---------- BUILD MARKDOWN REPORT ----------
+def build_markdown_report(data):
+    md = []
+
+    md.append("# Network Documentation Report\n")
+
+    # DEVICE SUMMARY
+    dev = data.get("device_summary", {})
+    md.append("## Device Summary")
+    md.append(f"- Hostname: {dev.get('hostname')}")
+    md.append(f"- Model: {dev.get('model')}")
+    md.append(f"- Serial: {dev.get('serial')}")
+    md.append(f"- OS Version: {dev.get('os_version')}\n")
+
+    # VLANS
+    md.append("## VLANs")
+    for v in data.get("vlans", []):
+        md.append(f"- VLAN {v.get('vlan_id')}: {v.get('name')} (Ports: {', '.join(v.get('ports', []))})")
+
+    # INTERFACES
+    md.append("\n## Interfaces")
+    for i in data.get("interfaces", []):
+        md.append(f"- {i.get('name')} | IP: {i.get('ip_address')} | VLAN: {i.get('vlan')} | Status: {i.get('status')}")
+
+    # NEIGHBORS
+    md.append("\n## Neighbors (CDP/LLDP)")
+    for n in data.get("neighbors", []):
+        md.append(f"- {n.get('local_interface')} → {n.get('neighbor_device')} ({n.get('neighbor_interface')})")
+
+    # ROUTING
+    r = data.get("routing_summary", {})
+    md.append("\n## Routing Summary")
+    md.append(f"- Protocols: {', '.join(r.get('dynamic_protocols', []))}")
+    md.append(f"- Default Route: {r.get('default_route')}")
+    md.append(f"- Total Routes: {r.get('total_routes')}")
+
+    # TOPOLOGY
+    top = data.get("ascii_topology", "")
+    if top:
+        md.append("\n## Topology\n")
+        md.append("```\n" + top + "\n```")
+
+    return "\n".join(md)
+
+
+# ---------- SAFE PDF GENERATOR ----------
 def generate_pdf(markdown_text):
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
     pdf.set_font("Arial", size=10)
 
-    lines = markdown_text.split("\n")
+    safe_text = markdown_text.replace("\t", "    ")
+    safe_lines = safe_text.split("\n")
 
-    for line in lines:
-        wrapped = textwrap.wrap(line, width=90)
-
-        if not wrapped:
+    for line in safe_lines:
+        # wrap long lines safely
+        if len(line) == 0:
             pdf.ln(5)
         else:
-            for w in wrapped:
-                pdf.multi_cell(0, 5, w)
+            while len(line) > 80:
+                pdf.multi_cell(0, 5, line[:80])
+                line = line[80:]
+            pdf.multi_cell(0, 5, line)
 
-    return pdf.output(dest="S").encode("latin-1")
+    return pdf.output(dest="S").encode("latin1")
 
-# ---------------- STREAMLIT UI ----------------
 
+# ---------- STREAMLIT UI ----------
 st.set_page_config(page_title="NetDoc AI", layout="wide")
 
 st.title("⚡ Network Documentation AI Agent")
 st.write("Upload your switch/router configs and generate automated documentation.")
 
 uploaded_files = st.file_uploader(
-    "Upload 1 or more config files",
+    "Upload config files",
     type=["txt", "log", "cfg"],
     accept_multiple_files=True
 )
@@ -57,13 +103,10 @@ if st.button("Generate Documentation") and uploaded_files:
     st.success("Report generated successfully!")
     st.json(result)
 
-    # Convert dict → readable markdown
-    md_report = json.dumps(result, indent=2)
+    md_report = build_markdown_report(result)
 
-    # Create PDF bytes
     pdf_bytes = generate_pdf(md_report)
 
-    # Download Button
     st.download_button(
         "📥 Download PDF Report",
         data=pdf_bytes,
