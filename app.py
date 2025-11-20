@@ -3,76 +3,215 @@ import json
 import streamlit as st
 from openai import OpenAI
 from utils.parser import parse_config
+from docx import Document
+from docx.shared import Inches
 
-# ---------------- API KEY ----------------
+# -------------------------------------------------------------
+# LOAD API KEY
+# -------------------------------------------------------------
 api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-# ---------------- PDF (REPORTLAB) ----------------
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.utils import simpleSplit
+# -------------------------------------------------------------
+# AI UTILITIES
+# -------------------------------------------------------------
+def ai_generate_topology(text):
+    prompt = f"""
+You are a network topology generator.
 
-def generate_pdf(markdown_text):
-    from io import BytesIO
-    buffer = BytesIO()
+Given the following multiple device configs:  
+{text}
 
-    pdf = canvas.Canvas(buffer, pagesize=letter)
-    width, height = letter
+Return ONLY ASCII topology. Example:
 
-    x = 40
-    y = height - 40
-    line_height = 14
+[SW1 Gi1/0/1] ---- [CORE Gi0/1]
+       |
+[VLAN 10]
 
-    pdf.setFont("Helvetica", 10)
-
-    for line in markdown_text.split("\n"):
-        wrapped = simpleSplit(line, "Helvetica", 10, width - 80)
-        for w in wrapped:
-            if y < 40:
-                pdf.showPage()
-                pdf.setFont("Helvetica", 10)
-                y = height - 40
-            pdf.drawString(x, y, w)
-            y -= line_height
-
-    pdf.save()
-    buffer.seek(0)
-    return buffer.read()
+Return ONLY ASCII topology. No explanation.
+"""
+    res = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    return res.choices[0].message.content.strip()
 
 
-# ---------------- STREAMLIT UI ----------------
+def ai_security_audit(text):
+    prompt = f"""
+You are a senior network security auditor.
 
+Perform a detailed security audit for all configs below:
+
+{text}
+
+Check:
+- Password strength
+- Enable secret
+- Insecure protocols
+- STP security
+- DHCP snooping
+- VLAN hopping
+- BPDU Guard
+- Port security
+- Unused interfaces
+- SSH vs Telnet
+- SNMP security
+- Outdated IOS
+- Misconfigured trunks
+
+Return a clean bullet list of findings + recommended fixes.
+"""
+    res = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    return res.choices[0].message.content
+
+
+# -------------------------------------------------------------
+# DOCX EXPORT
+# -------------------------------------------------------------
+def export_docx(json_data, topology, audit):
+    doc = Document()
+
+    # OPTIONAL LOGO (must be inside your repo)
+    logo_path = "logo.png"
+    if os.path.exists(logo_path):
+        doc.add_picture(logo_path, width=Inches(2))
+
+    doc.add_heading("NetDoc AI – Network Documentation Report", level=1)
+
+    doc.add_heading("1. Device Summary", level=2)
+    doc.add_paragraph(json.dumps(json_data["device_summary"], indent=2))
+
+    doc.add_heading("2. VLANs", level=2)
+    doc.add_paragraph(json.dumps(json_data["vlans"], indent=2))
+
+    doc.add_heading("3. Interfaces", level=2)
+    doc.add_paragraph(json.dumps(json_data["interfaces"], indent=2))
+
+    doc.add_heading("4. Neighbors", level=2)
+    doc.add_paragraph(json.dumps(json_data["neighbors"], indent=2))
+
+    doc.add_heading("5. Routing Summary", level=2)
+    doc.add_paragraph(json.dumps(json_data["routing_summary"], indent=2))
+
+    doc.add_heading("6. Topology", level=2)
+    doc.add_paragraph(topology)
+
+    doc.add_heading("7. Security Audit", level=2)
+    doc.add_paragraph(audit)
+
+    file_path = "Network_Report.docx"
+    doc.save(file_path)
+    return file_path
+
+
+# -------------------------------------------------------------
+# HTML EXPORT
+# -------------------------------------------------------------
+def export_html(json_data, topology, audit):
+    html = f"""
+    <html>
+    <head>
+        <title>NetDoc AI Report</title>
+        <style>
+            body {{ font-family: Arial; padding:20px; }}
+            pre {{ background:#f0f0f0; padding:10px; }}
+        </style>
+    </head>
+    <body>
+        <h1>NetDoc AI – Network Documentation Report</h1>
+
+        <h2>Device Summary</h2>
+        <pre>{json.dumps(json_data["device_summary"], indent=2)}</pre>
+
+        <h2>VLANs</h2>
+        <pre>{json.dumps(json_data["vlans"], indent=2)}</pre>
+
+        <h2>Interfaces</h2>
+        <pre>{json.dumps(json_data["interfaces"], indent=2)}</pre>
+
+        <h2>Neighbors</h2>
+        <pre>{json.dumps(json_data["neighbors"], indent=2)}</pre>
+
+        <h2>Routing Summary</h2>
+        <pre>{json.dumps(json_data["routing_summary"], indent=2)}</pre>
+
+        <h2>Topology</h2>
+        <pre>{topology}</pre>
+
+        <h2>Security Audit</h2>
+        <pre>{audit}</pre>
+    </body>
+    </html>
+    """
+    with open("Network_Report.html", "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return "Network_Report.html"
+
+
+# -------------------------------------------------------------
+# STREAMLIT UI
+# -------------------------------------------------------------
 st.set_page_config(page_title="NetDoc AI", layout="wide")
 
-st.title("⚡ Network Documentation AI Agent")
-st.write("Upload your switch/router configs and generate automated documentation.")
+st.title("⚡ NetDoc AI — Enterprise Network Documentation Generator")
+st.write("Upload Cisco configs to generate full documentation + audit.")
+
 
 uploaded_files = st.file_uploader(
-    "Upload 1 or more config files",
-    type=["txt", "log", "cfg"],
+    "Upload your .txt / .cfg / .log files",
+    type=["txt", "cfg", "log"],
     accept_multiple_files=True
 )
 
+
 if st.button("Generate Documentation") and uploaded_files:
+
     combined = ""
     for f in uploaded_files:
         combined += f"\n\n# FILE: {f.name}\n"
         combined += f.read().decode("utf-8")
 
-    with st.spinner("Analyzing configuration..."):
+    with st.spinner("Parsing device configs..."):
         result = parse_config(combined)
 
-    st.success("Report generated successfully!")
+    with st.spinner("Generating topology diagram..."):
+        topology = ai_generate_topology(combined)
+
+    with st.spinner("Running security audit..."):
+        audit = ai_security_audit(combined)
+
+    st.success("Done!")
+
+    st.subheader("📌 Parsed JSON")
     st.json(result)
 
-    md_report = json.dumps(result, indent=2)
+    st.subheader("📌 Topology (AI-Generated)")
+    st.code(topology)
 
-    pdf_bytes = generate_pdf(md_report)
+    st.subheader("📌 Security Audit (AI-Generated)")
+    st.write(audit)
 
-    st.download_button(
-        "📥 Download PDF Report",
-        data=pdf_bytes,
-        file_name="Network_Documentation_Report.pdf",
-        mime="application/pdf"
-    )
+    # ---- EXPORT DOCX ----
+    docx_file = export_docx(result, topology, audit)
+    with open(docx_file, "rb") as f:
+        st.download_button(
+            "📥 Download DOCX Report",
+            data=f,
+            file_name="Network_Documentation_Report.docx"
+        )
+
+    # ---- EXPORT HTML ----
+    html_file = export_html(result, topology, audit)
+    with open(html_file, "rb") as f:
+        st.download_button(
+            "🌐 Download HTML Report",
+            data=f,
+            file_name="Network_Documentation_Report.html"
+        )
