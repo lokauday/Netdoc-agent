@@ -1,222 +1,81 @@
-import os
 import json
-import streamlit as st
-from dotenv import load_dotenv
-from openai import OpenAI
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from io import BytesIO
+from docx import Document
 
-# Load environment variables locally
-load_dotenv()
+# -----------------------------
+# SECURITY AUDIT ENGINE
+# -----------------------------
+def run_security_audit(parsed):
+    audit = {}
+    
+    # Weak enable passwords
+    audit["weak_passwords"] = "enable secret not found" if "enable" not in str(parsed).lower() else "OK"
+    
+    # VLAN issues
+    audit["vlan_check"] = f"{len(parsed.get('vlans', []))} VLANs parsed"
+    
+    # STP check
+    audit["stp"] = "Check STP config manually" 
+    
+    # ACL check
+    audit["acl"] = "No ACLs detected (OK or missing)"
 
-# Load cloud secret if deployed on Streamlit Cloud
-api_key = (
-    st.secrets["OPENAI_API_KEY"]
-    if "OPENAI_API_KEY" in st.secrets
-    else os.getenv("OPENAI_API_KEY")
-)
-
-# Initialize OpenAI client
-client = OpenAI(api_key=api_key)
-
-
-
-def read_file(path: str) -> str:
-    """Read a text file and return its content."""
-    with open(path, "r") as f:
-        return f.read()
-
-
-def build_prompt(config_text: str) -> str:
-    """Build the prompt we send to the AI."""
-    return f"""
-You are a senior network engineer and documentation specialist.
-
-You will be given raw CLI outputs from one or more Cisco switches/routers, including:
-- show running-config
-- show vlan brief
-- show ip interface brief
-- show cdp neighbors
-- show lldp neighbors
-- show version
-- show ip route (if present)
-
-From this, produce a STRICT JSON object with the following keys:
-
-"device_summary": {{
-  "hostname": string or null,
-  "model": string or null,
-  "serial": string or null,
-  "os_version": string or null
-}},
-
-"vlans": [
-  {{"vlan_id": "10", "name": "USERS", "ports": ["Gi1/0/1","Gi1/0/2"]}}
-],
-
-"interfaces": [
-  {{
-    "name": "GigabitEthernet1/0/1",
-    "description": "Uplink to Core" or "",
-    "ip_address": "10.0.1.1/24" or null,
-    "vlan": "10" or null,
-    "status": "up" or "down" or null,
-    "protocol": "up" or "down" or null
-  }}
-],
-
-"neighbors": [
-  {{
-    "local_interface": "GigabitEthernet1/0/1",
-    "neighbor_device": "CORE1",
-    "neighbor_interface": "GigabitEthernet0/1"
-  }}
-],
-
-"routing_summary": {{
-  "dynamic_protocols": ["OSPF","BGP"] or [],
-  "default_route": "0.0.0.0/0 via 10.0.0.1" or null,
-  "total_routes": integer or null
-}},
-
-"security_findings": [
-  {{
-    "issue": "Example: VTY lines use password-only authentication",
-    "severity": "low/medium/high/critical",
-    "recommendation": "Example: Use AAA with local or TACACS+ users"
-  }}
-],
-
-"ascii_topology": "Simple ASCII art drawing of the topology using device names and interfaces."
-
-Rules:
-- Infer reasonable values when possible.
-- If information is missing, use null or empty values.
-- For security_findings, look for obvious things: weak or plain-text passwords, lack of AAA, no logging, no BPDU guard, default VLAN usage, unused open interfaces, etc.
-- Return ONLY valid JSON text. No comments, no markdown, no extra text.
-
-CONFIG_START
-{config_text}
-CONFIG_END
-"""
+    return audit
 
 
-def call_openai(prompt: str) -> str:
-    """Call OpenAI using chat.completions and return the JSON text."""
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
-    # The assistant's reply content (should be pure JSON text)
-    return response.choices[0].message.content
+# -----------------------------
+# TOPOLOGY ENGINE (MERMAID)
+# -----------------------------
+def generate_topology_mermaid(parsed):
+    neighbors = parsed.get("neighbors", [])
+    if not neighbors:
+        return "No topology info found."
+
+    lines = ["```mermaid", "graph TD;"]
+
+    for n in neighbors:
+        a = n.get("local_interface", "X")
+        b = n.get("neighbor_device", "Device")
+        c = n.get("neighbor_interface", "Y")
+        lines.append(f'    "{a}" -->|{c}| "{b}"')
+
+    lines.append("```")
+    return "\n".join(lines)
 
 
-def build_markdown_report(data: dict) -> str:
-    """Turn the parsed JSON into a markdown documentation report."""
-    device = data.get("device_summary", {}) or {}
-    vlans = data.get("vlans", []) or []
-    interfaces = data.get("interfaces", []) or []
-    neighbors = data.get("neighbors", []) or []
-    routing = data.get("routing_summary", {}) or {}
-    security = data.get("security_findings", []) or []
-    ascii_topology = data.get("ascii_topology", "") or ""
+# -----------------------------
+# EXPORT ENGINE
+# -----------------------------
+def export_all_formats(parsed, markdown):
 
-    md = []
+    # ------------------- PDF (ReportLab) -------------------
+    pdf_buffer = BytesIO()
+    c = canvas.Canvas(pdf_buffer, pagesize=letter)
+    c.setFont("Helvetica", 10)
 
-    md.append("# Network Documentation Report\n")
+    y = 750
+    for line in markdown.split("\n"):
+        c.drawString(40, y, line[:100])
+        y -= 14
+        if y < 40:
+            c.showPage()
+            c.setFont("Helvetica", 10)
+            y = 750
+    c.save()
+    pdf_bytes = pdf_buffer.getvalue()
 
-    # Device summary
-    md.append("## Device Summary")
-    md.append(f"- **Hostname:** {device.get('hostname', '')}")
-    md.append(f"- **Model:** {device.get('model', '')}")
-    md.append(f"- **Serial:** {device.get('serial', '')}")
-    md.append(f"- **OS Version:** {device.get('os_version', '')}\n")
+    # ------------------- DOCX -------------------
+    doc = Document()
+    doc.add_heading("NetDoc AI Report", 0)
+    for line in markdown.split("\n"):
+        doc.add_paragraph(line)
+    doc_buffer = BytesIO()
+    doc.save(doc_buffer)
+    docx_bytes = doc_buffer.getvalue()
 
-    # VLANs
-    md.append("## VLANs")
-    if vlans:
-        md.append("| VLAN ID | Name | Ports |")
-        md.append("|--------|------|-------|")
-        for v in vlans:
-            ports = ", ".join(v.get("ports", []) or [])
-            md.append(f"| {v.get('vlan_id','')} | {v.get('name','')} | {ports} |")
-    else:
-        md.append("_No VLAN information found._")
+    # ------------------- HTML -------------------
+    html_text = f"<html><body><pre>{markdown}</pre></body></html>"
 
-    # Interfaces
-    md.append("\n## Interfaces")
-    if interfaces:
-        md.append("| Interface | Description | IP Address | VLAN | Status | Protocol |")
-        md.append("|-----------|-------------|-----------|------|--------|----------|")
-        for intf in interfaces:
-            md.append(
-                f"| {intf.get('name','')} "
-                f"| {intf.get('description','')} "
-                f"| {intf.get('ip_address','')} "
-                f"| {intf.get('vlan','')} "
-                f"| {intf.get('status','')} "
-                f"| {intf.get('protocol','')} |"
-            )
-    else:
-        md.append("_No interface information found._")
-
-    # Neighbors
-    md.append("\n## Neighbors (CDP/LLDP)")
-    if neighbors:
-        md.append("| Local Interface | Neighbor Device | Neighbor Interface |")
-        md.append("|----------------|-----------------|--------------------|")
-        for n in neighbors:
-            md.append(
-                f"| {n.get('local_interface','')} "
-                f"| {n.get('neighbor_device','')} "
-                f"| {n.get('neighbor_interface','')} |"
-            )
-    else:
-        md.append("_No neighbor information found._")
-
-    # Routing summary
-    md.append("\n## Routing Summary")
-    md.append(f"- Dynamic Protocols: {', '.join(routing.get('dynamic_protocols', []) or [])}")
-    md.append(f"- Default Route: {routing.get('default_route','')}")
-    md.append(f"- Total Routes: {routing.get('total_routes','')}")
-
-    # Security findings
-    md.append("\n## Security Findings")
-    if security:
-        for finding in security:
-            md.append(f"- **Issue:** {finding.get('issue','')}")
-            md.append(f"  - Severity: **{finding.get('severity','')}**")
-            md.append(f"  - Recommendation: {finding.get('recommendation','')}\n")
-    else:
-        md.append("_No obvious security issues detected (based on config provided)._")
-
-    # ASCII topology
-    md.append("\n## Topology (ASCII View)")
-    if ascii_topology:
-        md.append("```")
-        md.append(ascii_topology)
-        md.append("```")
-    else:
-        md.append("_No topology information generated._")
-
-    return "\n".join(md)
-
-
-if __name__ == "__main__":
-    # 1) Read your sample config
-    config_text = read_file("sample_config.txt")
-
-    # 2) Build prompt and call OpenAI
-    prompt = build_prompt(config_text)
-    json_text = call_openai(prompt)
-
-    # 3) Parse JSON text to dict
-    data = json.loads(json_text)
-
-    # 4) Build markdown report
-    md_report = build_markdown_report(data)
-
-    # 5) Save to file
-    with open("report.md", "w", encoding="utf-8") as f:
-        f.write(md_report)
-
-    print("✅ Documentation generated: report.md")
+    return pdf_bytes, docx_bytes, html_text
