@@ -1,5 +1,6 @@
 streamlit
 openai
-python-dotenv
-fpdf2
-graphviz
+reportlab==3.6.12
+python-docx
+markdown
+requests
