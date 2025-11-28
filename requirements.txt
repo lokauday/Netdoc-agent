@@ -1,6 +1,9 @@
-streamlit
-openai
-python-dotenv
+bcrypt
+psycopg2-binary
 reportlab
 python-docx
-markdown-it-py
+fpdf2
+python-dotenv
+sqlalchemy
+pandas
+streamlit
