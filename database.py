@@ -1,25 +1,36 @@
 # ============================================================
 #  NetDoc AI — Enterprise Edition
-#  database.py (FINAL, 100% FIXED)
+#  database.py (FINAL FULL VERSION)
 # ============================================================
 
 import os
+import json
+import streamlit as st
 from datetime import datetime
 from sqlalchemy import (
     create_engine, Column, Integer, String,
     Text, Boolean, ForeignKey, DateTime
 )
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
-from sqlalchemy.dialects.postgresql import JSONB
 from dotenv import load_dotenv
 import bcrypt
 
 # ------------------------------------------------------------
-# Load .env
+# LOAD SECRETS + .ENV
 # ------------------------------------------------------------
 load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Prefer local DATABASE_URL → fallback to Streamlit secrets
+DATABASE_URL = os.getenv("DATABASE_URL") or st.secrets.get("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise Exception(
+        "❌ DATABASE_URL missing! Add it to Streamlit Secrets or .env"
+    )
+
+# ------------------------------------------------------------
+# CREATE ENGINE
+# ------------------------------------------------------------
 engine = create_engine(
     DATABASE_URL,
     echo=False,
@@ -27,7 +38,6 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
 Base = declarative_base()
 
 
@@ -58,8 +68,7 @@ class User(Base):
     org_id = Column(Integer, ForeignKey("organizations.id"))
     email = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
-
-    role = Column(String, default="user")     # user / admin
+    role = Column(String, default="user")   # user/admin
     is_admin = Column(Boolean, default=False)
 
     organization = relationship("Organization", back_populates="users")
@@ -95,7 +104,7 @@ class APIKey(Base):
 
 
 # ============================================================
-#  UPLOADED CONFIGS (JSONB FIXED)
+#  UPLOADED CONFIGS
 # ============================================================
 class UploadedConfig(Base):
     __tablename__ = "uploaded_configs"
@@ -104,8 +113,7 @@ class UploadedConfig(Base):
     org_id = Column(Integer, ForeignKey("organizations.id"))
     file_name = Column(String)
     content = Column(Text)
-
-    parsed_json = Column(JSONB)  # <-- FIXED (was Text)
+    parsed_json = Column(Text)  # store JSON string
 
     organization = relationship("Organization", back_populates="uploads")
 
@@ -119,15 +127,14 @@ class AuditReport(Base):
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, ForeignKey("organizations.id"))
     title = Column(String)
-    result = Column(JSONB)  # <-- also JSONB if storing dict
-
+    result = Column(Text)  # JSON dump
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="audits")
 
 
 # ============================================================
-#  ACTIVITY LOGS  (metadata FIXED → meta_json)
+#  ACTIVITY LOGS (metadata FIXED → meta_json)
 # ============================================================
 class ActivityLog(Base):
     __tablename__ = "activity_logs"
@@ -135,20 +142,17 @@ class ActivityLog(Base):
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, ForeignKey("organizations.id"))
     event = Column(String)
-
-    meta_json = Column(JSONB)   # <-- FIXED
-
+    meta_json = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="logs")
 
 
 # ============================================================
-#  INITIALIZE DB + DEFAULT ADMIN
+#  DATABASE INITIALIZER + DEFAULT ADMIN
 # ============================================================
 def init_db():
     print("📢 Creating tables...")
-    Base.metadata.drop_all(bind=engine)     # <-- CLEAN RESET
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
@@ -166,6 +170,7 @@ def init_db():
         db.refresh(org)
 
         print("🛠 Creating admin user...")
+
         hashed = bcrypt.hashpw(ADMIN_PASS.encode(), bcrypt.gensalt()).decode()
 
         admin = User(
@@ -183,3 +188,16 @@ def init_db():
         print("✔ Admin user already exists.")
 
     db.close()
+
+
+# ============================================================
+#  JSON HELPERS
+# ============================================================
+def to_json(obj):
+    return json.dumps(obj, indent=2)
+
+def from_json(txt):
+    try:
+        return json.loads(txt)
+    except:
+        return {}
