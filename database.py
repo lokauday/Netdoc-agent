@@ -1,10 +1,9 @@
 # ============================================================
 #  NetDoc AI — Enterprise Edition
-#  database.py (FINAL FULL VERSION)
+#  database.py (FINAL)
 # ============================================================
 
 import os
-import json
 import streamlit as st
 from datetime import datetime
 from sqlalchemy import (
@@ -16,20 +15,18 @@ from dotenv import load_dotenv
 import bcrypt
 
 # ------------------------------------------------------------
-# LOAD SECRETS + .ENV
+# Load environment variables (.env local) or Streamlit Secrets (Cloud)
 # ------------------------------------------------------------
 load_dotenv()
 
-# Prefer local DATABASE_URL → fallback to Streamlit secrets
 DATABASE_URL = os.getenv("DATABASE_URL") or st.secrets.get("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise Exception(
-        "❌ DATABASE_URL missing! Add it to Streamlit Secrets or .env"
-    )
+    raise Exception("❌ DATABASE_URL is missing — add it to .env (local) or Streamlit Secrets (cloud)")
+
 
 # ------------------------------------------------------------
-# CREATE ENGINE
+# DATABASE ENGINE
 # ------------------------------------------------------------
 engine = create_engine(
     DATABASE_URL,
@@ -38,6 +35,7 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
 Base = declarative_base()
 
 
@@ -68,14 +66,14 @@ class User(Base):
     org_id = Column(Integer, ForeignKey("organizations.id"))
     email = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    role = Column(String, default="user")   # user/admin
+    role = Column(String, default="user")     # FIXED
     is_admin = Column(Boolean, default=False)
 
     organization = relationship("Organization", back_populates="users")
 
 
 # ============================================================
-#  BILLING
+#  BILLING MODEL
 # ============================================================
 class Billing(Base):
     __tablename__ = "billing"
@@ -89,7 +87,7 @@ class Billing(Base):
 
 
 # ============================================================
-#  API KEYS
+#  API KEYS MODEL
 # ============================================================
 class APIKey(Base):
     __tablename__ = "api_keys"
@@ -104,7 +102,7 @@ class APIKey(Base):
 
 
 # ============================================================
-#  UPLOADED CONFIGS
+#  UPLOADED CONFIG MODEL
 # ============================================================
 class UploadedConfig(Base):
     __tablename__ = "uploaded_configs"
@@ -113,13 +111,13 @@ class UploadedConfig(Base):
     org_id = Column(Integer, ForeignKey("organizations.id"))
     file_name = Column(String)
     content = Column(Text)
-    parsed_json = Column(Text)  # store JSON string
+    parsed_json = Column(Text)    # stored as JSON text
 
     organization = relationship("Organization", back_populates="uploads")
 
 
 # ============================================================
-#  AUDIT REPORTS
+#  AUDIT REPORT
 # ============================================================
 class AuditReport(Base):
     __tablename__ = "audit_reports"
@@ -127,14 +125,14 @@ class AuditReport(Base):
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, ForeignKey("organizations.id"))
     title = Column(String)
-    result = Column(Text)  # JSON dump
+    result = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="audits")
 
 
 # ============================================================
-#  ACTIVITY LOGS (metadata FIXED → meta_json)
+#  ACTIVITY LOG (FIXED: metadata → meta_json)
 # ============================================================
 class ActivityLog(Base):
     __tablename__ = "activity_logs"
@@ -142,14 +140,14 @@ class ActivityLog(Base):
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, ForeignKey("organizations.id"))
     event = Column(String)
-    meta_json = Column(Text)
+    meta_json = Column(Text)  # FIXED name
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization", back_populates="logs")
 
 
 # ============================================================
-#  DATABASE INITIALIZER + DEFAULT ADMIN
+#  INITIALIZE DATABASE + CREATE DEFAULT ADMIN
 # ============================================================
 def init_db():
     print("📢 Creating tables...")
@@ -170,7 +168,6 @@ def init_db():
         db.refresh(org)
 
         print("🛠 Creating admin user...")
-
         hashed = bcrypt.hashpw(ADMIN_PASS.encode(), bcrypt.gensalt()).decode()
 
         admin = User(
@@ -180,24 +177,13 @@ def init_db():
             role="admin",
             is_admin=True
         )
+
         db.add(admin)
         db.commit()
 
         print("🎉 Admin user created!")
+
     else:
         print("✔ Admin user already exists.")
 
     db.close()
-
-
-# ============================================================
-#  JSON HELPERS
-# ============================================================
-def to_json(obj):
-    return json.dumps(obj, indent=2)
-
-def from_json(txt):
-    try:
-        return json.loads(txt)
-    except:
-        return {}
