@@ -1,315 +1,568 @@
-import os
-import json
-import streamlit as st
-from main import run_security_audit, generate_topology_mermaid, export_all_formats
-from utils.parser import parse_config
+# ============================================================
+#   NetDoc AI — Enterprise Edition
+#   FULL APP.PY (ALL BLOCKS MERGED)
+# ============================================================
 
-# -----------------------------------------------------------
-# PAGE CONFIG — DATADOG DARK MODE
-# -----------------------------------------------------------
-st.set_page_config(
-    page_title="NetDoc AI — Enterprise",
-    page_icon="⚡",
-    layout="wide"
+import streamlit as st
+import json
+import os
+import time
+import bcrypt
+import pandas as pd
+from datetime import datetime
+
+from database import (
+    SessionLocal, User, Organization,
+    Billing, ActivityLog, APIKey, UploadedConfig, AuditReport
 )
 
-# -----------------------------------------------------------
-# GLOBAL CSS — SUPER CLEAN ENTERPRISE
-# -----------------------------------------------------------
+from utils.parser import parse_config
+from main import run_security_audit, generate_topology_mermaid, export_all_formats
+
+# ============================================================
+# SESSION INITIALIZATION
+# ============================================================
+
+def init_session():
+    if "user" not in st.session_state:
+        st.session_state.user = None
+    if "org" not in st.session_state:
+        st.session_state.org = None
+    if "is_admin" not in st.session_state:
+        st.session_state.is_admin = False
+    if "page" not in st.session_state:
+        st.session_state.page = "Login"
+    if "report" not in st.session_state:
+        st.session_state.report = None
+
+init_session()
+
+# ============================================================
+# PASSWORD UTILITIES
+# ============================================================
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+# ============================================================
+# AUTO-BOOTSTRAP DEFAULT ADMIN
+# ============================================================
+
+def bootstrap_admin():
+    """
+    Automatically create default admin:
+    Email: lokauday456@gmail.com
+    Pass:  Bittu369$
+    """
+    db = SessionLocal()
+
+    ADMIN_EMAIL = "lokauday456@gmail.com"
+    ADMIN_HASH = "$2b$12$OfgfE0WXG.F6CTa2gMrCsedQy6VbexmJ8nP2UQwiv9a8lxKeut77K"
+
+    admin = db.query(User).filter(User.email == ADMIN_EMAIL).first()
+
+    if admin is None:
+        org = Organization(org_name="NetDoc AI Enterprise")
+        db.add(org)
+        db.commit()
+        db.refresh(org)
+
+        admin = User(
+            org_id=org.id,
+            email=ADMIN_EMAIL,
+            password_hash=ADMIN_HASH,
+            is_admin=True
+        )
+        db.add(admin)
+        db.commit()
+        print("🔥 Admin user created successfully.")
+    else:
+        print("✔ Admin already exists")
+
+    db.close()
+
+bootstrap_admin()
+
+# ============================================================
+# AUTH GUARDS
+# ============================================================
+
+def require_login():
+    if st.session_state.user is None:
+        st.warning("Please login first.")
+        st.stop()
+
+def require_admin():
+    if not st.session_state.is_admin:
+        st.error("Admin access required.")
+        st.stop()
+
+# ============================================================
+# GLOBAL DARK THEME CSS
+# ============================================================
+
 st.markdown("""
 <style>
-
-body {
-    background-color: #1a1d21 !important;
-    color: #e2e2e2 !important;
-}
-
-/* SIDEBAR */
-section[data-testid="stSidebar"] {
-    background-color: #141619 !important;
-    border-right: 1px solid #2a2d33;
-}
-
-.sidebar-title {
-    font-size: 22px;
-    font-weight: 700;
-    color: #5b9bff;
-    margin-bottom: 10px;
-}
-
-/* MAIN HEADER */
-.header {
-    background-color: #1e2126;
-    padding: 22px 30px;
-    border-radius: 10px;
-    border: 1px solid #2a2e35;
-    margin-bottom: 25px;
-    box-shadow: 0px 3px 12px rgba(0,0,0,0.4);
-}
-
-.header-title {
-    font-size: 32px;
-    color: #5b9bff;
-    font-weight: 800;
-}
-
-.header-sub {
-    font-size: 15px;
-    color: #c3c3c3;
-    margin-top: -5px;
-}
-
-/* CARD */
-.card {
-    background-color: #24272b;
-    padding: 22px;
-    border-radius: 12px;
-    border: 1px solid #30343a;
-    margin-bottom: 24px;
-}
-
-.card h3 {
-    font-size: 22px;
-    color: #8ab4ff;
-    margin-bottom: 12px;
-}
-
-/* MERMAID */
-.mermaid {
-    background-color: #1f2125 !important;
-    padding: 18px;
-    border-radius: 12px;
-}
-
+body { background-color:#1a1d21 !important; color:#e2e2e2 !important; }
+section[data-testid="stSidebar"] { background:#141619 !important; border-right:1px solid #2a2d33; }
+.card { background:#24272b; padding:22px; border-radius:12px; border:1px solid #30343a; margin-bottom:24px; }
+.metric-card { background:#24272b; padding:18px; border-radius:12px; border:1px solid #2f3239; }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------
+# ============================================================
+# LOGIN PAGE
+# ============================================================
+
+def login_page():
+    st.title("🔐 Login to NetDoc AI")
+
+    email = st.text_input("Email")
+    pw = st.text_input("Password", type="password")
+
+    if st.button("Login", use_container_width=True):
+        db = SessionLocal()
+        user = db.query(User).filter(User.email == email).first()
+
+        if user and verify_password(pw, user.password_hash):
+
+            st.session_state.user = user
+            st.session_state.org = db.query(Organization).filter(Organization.id == user.org_id).first()
+            st.session_state.is_admin = user.is_admin
+
+            st.session_state.page = "Home"
+            st.success("Login successful!")
+            st.rerun()
+
+        else:
+            st.error("Invalid email or password.")
+
+        db.close()
+
+# ============================================================
+# SIGNUP (ADMIN ONLY)
+# ============================================================
+
+def signup_page():
+    require_admin()
+
+    st.title("➕ Create New User")
+
+    email = st.text_input("Email")
+    pw = st.text_input("Password", type="password")
+    is_admin_bool = st.checkbox("Make admin")
+
+    if st.button("Create User"):
+        db = SessionLocal()
+        exists = db.query(User).filter(User.email == email).first()
+
+        if exists:
+            st.error("User already exists.")
+        else:
+            user = User(
+                org_id=st.session_state.org.id,
+                email=email,
+                password_hash=hash_password(pw),
+                is_admin=is_admin_bool
+            )
+            db.add(user)
+            db.commit()
+            st.success("User created.")
+        db.close()
+
+# ============================================================
+# LOGOUT
+# ============================================================
+
+def logout():
+    st.session_state.user = None
+    st.session_state.org = None
+    st.session_state.is_admin = False
+    st.session_state.page = "Login"
+    st.rerun()
+
+# ============================================================
 # SIDEBAR NAVIGATION
-# -----------------------------------------------------------
-with st.sidebar:
-    st.markdown("<div class='sidebar-title'>📂 Navigation</div>", unsafe_allow_html=True)
-    page = st.radio(
-        "",
-        ["Home", "Upload", "Documentation", "Security Audit", "Topology", "Exports", "About"]
-    )
+# ============================================================
 
-# -----------------------------------------------------------
-# TOP HEADER BAR
-# -----------------------------------------------------------
-st.markdown("""
-<div class="header">
-    <div class="header-title">⚡ NetDoc AI — Enterprise Edition</div>
-    <div class="header-sub">AI-powered network documentation with dark-mode Datadog-grade UI.</div>
-</div>
-""", unsafe_allow_html=True)
+def navbar():
+    if st.session_state.user is None:
+        return
 
-# -----------------------------------------------------------
-# PAGE: HOME (SaaS LANDING PAGE)
-# -----------------------------------------------------------
-if page == "Home":
+    with st.sidebar:
+        st.markdown("### 📂 Navigation")
 
+        menu = [
+            "Home", "Dashboard", "Upload",
+            "Documentation", "Security Audit", "Topology",
+            "Exports", "Billing", "System Health"
+        ]
+
+        if st.session_state.is_admin:
+            menu.append("Admin Console")
+
+        menu.append("Logout")
+
+        choice = st.radio("", menu)
+        st.session_state.page = choice
+
+# ============================================================
+# HOME PAGE (LANDING)
+# ============================================================
+
+def home_page():
+    require_login()
     st.markdown("""
     <div class="card" style="text-align:center; padding:50px;">
-        <h1 style="color:#5b9bff; font-size:42px; margin-bottom:10px;">
-            ⚡ NetDoc AI
-        </h1>
-        <p style="color:#d9d9d9; font-size:20px; max-width:700px; margin:auto;">
-            The next-generation AI engine that converts raw router & switch configs 
-            into professional documentation, audits, and topology maps — instantly.
-        </p>
-
-        <img src="logo.png" style="width:160px; margin-top:25px; 
-        box-shadow: 0 0 30px #5b9bff60; border-radius:12px;">
-        
-        <div style="margin-top:35px;">
-            <a href="#" onclick="window.location.reload()" 
-               style="background:#5b9bff; padding:12px 25px; 
-               border-radius:8px; color:black; font-weight:700; text-decoration:none;">
-               🚀 Get Started
-            </a>
-        </div>
+        <h1 style="color:#5b9bff;">⚡ NetDoc AI — Enterprise Edition</h1>
+        <p>AI-powered documentation, audits, topology & exports.</p>
+        <img src="logo.png" style="width:180px; margin-top:30px;">
     </div>
     """, unsafe_allow_html=True)
 
-    # ------------ FEATURES GRID -------------
-    st.markdown("""
-    <div class="card">
-        <h3>🔥 Why Choose NetDoc AI?</h3>
+# ============================================================
+# DASHBOARD
+# ============================================================
 
-        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+import random
 
-            <div style="flex:1; min-width:250px; background:#1d1f23; 
-                        padding:20px; border-radius:10px; border:1px solid #333;">
-                <h4 style="color:#8ab4ff;">⚙️ Instant Documentation</h4>
-                <p>Upload configs → AI generates professional network documentation automatically.</p>
-            </div>
+def dashboard_page():
+    require_login()
 
-            <div style="flex:1; min-width:250px; background:#1d1f23; 
-                        padding:20px; border-radius:10px; border:1px solid #333;">
-                <h4 style="color:#8ab4ff;">🛡 Security Audit</h4>
-                <p>Detect weak passwords, STP issues, ACL gaps, VLAN leaks, and misconfigurations.</p>
-            </div>
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 📊 Network Dashboard")
 
-            <div style="flex:1; min-width:250px; background:#1d1f23; 
-                        padding:20px; border-radius:10px; border:1px solid #333;">
-                <h4 style="color:#8ab4ff;">🌐 Topology Mapping</h4>
-                <p>AI generates live topology diagrams using Mermaid graph format.</p>
-            </div>
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Active Devices", random.randint(5, 20))
+    col2.metric("Total VLANs", random.randint(10, 50))
+    col3.metric("Uptime %", f"{random.randint(95,100)}%")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-            <div style="flex:1; min-width:250px; background:#1d1f23; 
-                        padding:20px; border-radius:10px; border:1px solid #333;">
-                <h4 style="color:#8ab4ff;">📤 Export Suite</h4>
-                <p>PDF, DOCX, HTML → professionally formatted exports ready for clients.</p>
-            </div>
+# ============================================================
+# UPLOAD + PARSE CONFIGS
+# ============================================================
 
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+def upload_page():
+    require_login()
 
-
-    # ------------ PRICING TABLE -------------
-    st.markdown("""
-    <div class="card">
-        <h3>💰 Pricing</h3>
-
-        <div style="display:flex; gap:20px; flex-wrap:wrap; text-align:center;">
-
-            <div style="flex:1; min-width:250px; background:#1d1f23; padding:25px; 
-                        border-radius:10px; border:1px solid #333;">
-                <h2 style="color:#8ab4ff;">Free</h2>
-                <p style="color:#ccc;">Basic features</p>
-                <h3 style="color:white;">$0</h3>
-                <p>• Upload configs<br>• Basic parsing<br>• JSON output</p>
-            </div>
-
-            <div style="flex:1; min-width:250px; background:#24272b; padding:25px; 
-                        border-radius:10px; border:2px solid #5b9bff; box-shadow:0 0 15px #5b9bff60;">
-                <h2 style="color:#5b9bff;">Pro</h2>
-                <p style="color:#ccc;">Full AI power</p>
-                <h3 style="color:white;">$19/mo</h3>
-                <p>• Security Audit<br>• Topology Mapping<br>• Export Suite<br>• Priority Access</p>
-            </div>
-
-            <div style="flex:1; min-width:250px; background:#1d1f23; padding:25px; 
-                        border-radius:10px; border:1px solid #333;">
-                <h2 style="color:#8a64ff;">Enterprise</h2>
-                <p style="color:#ccc;">Teams & companies</p>
-                <h3 style="color:white;">Contact</h3>
-                <p>• Multi-tenant<br>• SSO<br>• Branding<br>• Advanced analytics</p>
-            </div>
-
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-    # ------------ FOOTER -------------
-    st.markdown("""
-    <div style="text-align:center; padding:25px; color:#8a8a8a;">
-        © 2025 NetDoc AI • Created by Uday • Powered by OpenAI
-    </div>
-    """, unsafe_allow_html=True)
-
-# -----------------------------------------------------------
-# PAGE: UPLOAD
-# -----------------------------------------------------------
-elif page == "Upload":
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("### 📁 Upload Configuration Files")
 
-    uploaded_files = st.file_uploader(
-        "Choose config files:",
-        type=["txt", "log", "cfg"],
-        accept_multiple_files=True
+    files = st.file_uploader("Upload .txt / .cfg / .log", type=["txt","cfg","log"], accept_multiple_files=True)
+
+    if files and st.button("Process Files"):
+        full = ""
+
+        for f in files:
+            full += f"\n\n# FILE: {f.name}\n"
+            full += f.read().decode("utf-8")
+
+        parsed = parse_config(full)
+
+        # Save to DB
+        db = SessionLocal()
+        rec = UploadedConfig(
+            org_id=st.session_state.org.id,
+            file_name="Bundle Upload",
+            content=full,
+            parsed_json=parsed
+        )
+        db.add(rec)
+        db.commit()
+        db.close()
+
+        st.session_state.report = parsed
+        st.success("Uploaded & parsed successfully!")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# DOCUMENTATION PAGE
+# ============================================================
+
+def documentation_page():
+    require_login()
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 📄 Documentation Output")
+
+    if st.session_state.report:
+        st.json(st.session_state.report)
+    else:
+        st.info("Upload configuration files first.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# SECURITY AUDIT PAGE
+# ============================================================
+
+def audit_page():
+    require_login()
+
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 🛡 Security Audit")
+
+    if st.session_state.report:
+        with st.spinner("Running audit..."):
+            audit = run_security_audit(st.session_state.report)
+
+        db = SessionLocal()
+        rec = AuditReport(
+            org_id=st.session_state.org.id,
+            title="Security Audit",
+            result=audit
+        )
+        db.add(rec)
+        db.commit()
+        db.close()
+
+        st.json(audit)
+    else:
+        st.info("Upload configs first.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# TOPOLOGY PAGE
+# ============================================================
+
+def topology_page():
+    require_login()
+
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 🌐 Topology Diagram")
+
+    if st.session_state.report:
+        topo = generate_topology_mermaid(st.session_state.report)
+        st.markdown(f"```mermaid\n{topo}\n```")
+    else:
+        st.info("Upload configs first.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# EXPORTS PAGE
+# ============================================================
+
+def export_page():
+    require_login()
+
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 📤 Export Suite")
+
+    if st.session_state.report is None:
+        st.info("Generate documentation first.")
+        return
+
+    pdf, docx, html = export_all_formats(st.session_state.report)
+
+    st.download_button("📄 Download PDF", pdf, file_name="NetDoc_Report.pdf")
+    st.download_button("📝 Download DOCX", docx, file_name="NetDoc_Report.docx")
+    st.download_button("🌐 Download HTML", html, file_name="NetDoc_Report.html")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# BILLING PAGE
+# ============================================================
+
+def billing_page():
+    require_login()
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 💳 Billing & Subscription")
+
+    st.code("Enterprise Plan (Admin Managed)")
+
+    st.markdown("---")
+
+    col1, col2, col3 = st.columns(3)
+    col1.write("### Free\nBasic Upload")
+    col2.write("### Pro — $19/mo\nAudit + Topology + Exports")
+    col3.write("### Enterprise\nSSO + Branding")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# SYSTEM HEALTH PAGE
+# ============================================================
+
+import subprocess
+
+def system_health_page():
+    require_login()
+
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### 🩺 System Health")
+
+    col1, col2, col3 = st.columns(3)
+
+    # Ping
+    try:
+        out = subprocess.run(["ping","-n","1","8.8.8.8"], stdout=subprocess.PIPE, text=True).stdout
+        ok = "TTL=" in out
+        col1.metric("Internet", "Online" if ok else "Offline")
+    except:
+        col1.metric("Internet", "Error")
+
+    # Latency
+    try:
+        lat = [x for x in out.split("\n") if "time=" in x]
+        latency = lat[0].split("time=")[1] if lat else "N/A"
+        col2.metric("Latency", latency)
+    except:
+        col2.metric("Latency","N/A")
+
+    # DB
+    try:
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        db.close()
+        col3.metric("Database","Connected")
+    except:
+        col3.metric("Database","Error")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# ADMIN — USER MANAGEMENT
+# ============================================================
+
+def admin_user_management():
+    require_admin()
+    st.subheader("👥 User Management")
+
+    db = SessionLocal()
+    users = db.query(User).filter(User.org_id == st.session_state.org.id).all()
+
+    for u in users:
+        col1, col2, col3 = st.columns([4,2,2])
+        col1.write(f"📧 {u.email}")
+        col2.write("Admin" if u.is_admin else "User")
+        if col3.button(f"Delete {u.id}", key=f"del_{u.id}"):
+            db.delete(u)
+            db.commit()
+            st.warning(f"Deleted {u.email}")
+            st.rerun()
+
+    db.close()
+
+# ============================================================
+# ADMIN — API KEYS
+# ============================================================
+
+def admin_api_keys():
+    require_admin()
+    st.subheader("🔑 API Keys")
+
+    db = SessionLocal()
+
+    label = st.text_input("Label")
+
+    if st.button("Generate New API Key"):
+        raw = os.urandom(32).hex()
+        hashed = bcrypt.hashpw(raw.encode(), bcrypt.gensalt()).decode()
+
+        entry = APIKey(org_id=st.session_state.org.id, label=label, key_hash=hashed)
+        db.add(entry)
+        db.commit()
+
+        st.success("API Key Created!")
+        st.code(raw)
+
+    st.markdown("---")
+
+    keys = db.query(APIKey).filter(APIKey.org_id == st.session_state.org.id).all()
+    for k in keys:
+        st.write(f"🔹 {k.label} — {k.created_at}")
+        if st.button(f"Delete Key {k.id}", key=f"keydel_{k.id}"):
+            db.delete(k)
+            db.commit()
+            st.rerun()
+
+    db.close()
+
+# ============================================================
+# ADMIN — ACTIVITY LOGS
+# ============================================================
+
+def admin_activity_logs():
+    require_admin()
+    st.subheader("📜 Activity Logs")
+
+    db = SessionLocal()
+    logs = (
+        db.query(ActivityLog)
+        .filter(ActivityLog.org_id == st.session_state.org.id)
+        .order_by(ActivityLog.created_at.desc())
+        .limit(50)
+        .all()
     )
 
-    if uploaded_files and st.button("Process Files"):
-        all_text = ""
-        for f in uploaded_files:
-            all_text += f"\n\n# FILE: {f.name}\n"
-            all_text += f.read().decode("utf-8")
+    for l in logs:
+        st.write(f"🕒 {l.created_at} — {l.event}")
+        st.json(l.metadata)
 
-        with st.spinner("Analyzing configurations..."):
-            result = parse_config(all_text)
+    db.close()
 
-        st.session_state["report"] = result
-        st.session_state["md"] = json.dumps(result, indent=2)
+# ============================================================
+# ADMIN CONSOLE
+# ============================================================
 
-        st.success("✔ Successfully analyzed device configurations!")
+def admin_console_page():
+    require_admin()
+    st.title("👑 Admin Console")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    t1, t2, t3 = st.tabs(["Users", "API Keys", "Activity Logs"])
 
-# -----------------------------------------------------------
-# PAGE: DOCUMENTATION
-# -----------------------------------------------------------
-elif page == "Documentation":
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("### 📄 Generated Documentation")
+    with t1:
+        admin_user_management()
+    with t2:
+        admin_api_keys()
+    with t3:
+        admin_activity_logs()
 
-    if "report" in st.session_state:
-        st.json(st.session_state["report"])
+# ============================================================
+# ROUTER
+# ============================================================
+
+def router():
+    navbar()
+
+    p = st.session_state.page
+
+    if p == "Login":
+        login_page()
+    elif p == "Home":
+        home_page()
+    elif p == "Dashboard":
+        dashboard_page()
+    elif p == "Upload":
+        upload_page()
+    elif p == "Documentation":
+        documentation_page()
+    elif p == "Security Audit":
+        audit_page()
+    elif p == "Topology":
+        topology_page()
+    elif p == "Exports":
+        export_page()
+    elif p == "Billing":
+        billing_page()
+    elif p == "System Health":
+        system_health_page()
+    elif p == "Admin Console":
+        admin_console_page()
+    elif p == "Logout":
+        logout()
     else:
-        st.info("Upload configuration files first.")
+        st.error("Page not found.")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+# ============================================================
+# MAIN ENTRY
+# ============================================================
 
-# -----------------------------------------------------------
-# PAGE: SECURITY AUDIT
-# -----------------------------------------------------------
-elif page == "Security Audit":
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("### 🛡 Network Security Audit")
-
-    if "report" not in st.session_state:
-        st.info("Upload configuration files first.")
-    else:
-        audit = run_security_audit(st.session_state["report"])
-        st.json(audit)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------
-# PAGE: TOPOLOGY
-# -----------------------------------------------------------
-elif page == "Topology":
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("### 🌐 Network Topology Diagram")
-
-    if "report" not in st.session_state:
-        st.info("Upload configuration files first.")
-    else:
-        mermaid = generate_topology_mermaid(st.session_state["report"])
-        st.markdown(f"```mermaid\n{mermaid}\n```")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------
-# PAGE: EXPORTS
-# -----------------------------------------------------------
-elif page == "Exports":
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("### 📤 Export Report")
-
-    if "md" not in st.session_state:
-        st.info("Generate documentation first.")
-    else:
-        pdf, docx, html = export_all_formats(st.session_state["report"])
-
-        st.download_button("📄 Download PDF", pdf, file_name="NetDoc_Report.pdf")
-        st.download_button("📝 Download DOCX", docx, file_name="NetDoc_Report.docx")
-        st.download_button("🌐 Download HTML", html, file_name="NetDoc_Report.html")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------
-# PAGE: ABOUT
-# -----------------------------------------------------------
-elif page == "About":
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("### ℹ️ About NetDoc AI")
-
-    st.write("Premium Datadog-style dark UI. Automated network documentation, audit, and topology engine.")
-    st.image("logo.png", width=240)
-
-    st.markdown("</div>", unsafe_allow_html=True)
+if __name__ == "__main__":
+    router()
