@@ -4,11 +4,12 @@
 
 import bcrypt
 import streamlit as st
+from sqlalchemy.orm import joinedload
 from database import SessionLocal, User, Organization
 
 
 # ---------------------------------------------------------------
-# Create password hash
+# Hash password
 # ---------------------------------------------------------------
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode()
@@ -32,7 +33,7 @@ def signup_user(email: str, password: str):
         db.close()
         return False, "User already exists."
 
-    # default org
+    # Default organization
     org = db.query(Organization).first()
 
     new_user = User(
@@ -41,6 +42,7 @@ def signup_user(email: str, password: str):
         org_id=org.id,
         is_admin=0
     )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -64,14 +66,13 @@ def login_user(email: str, password: str):
         db.close()
         return False, "Incorrect password."
 
-    db.close()
-
-    # Store session
+    # Set session state
     st.session_state["user_id"] = user.id
     st.session_state["email"] = user.email
     st.session_state["is_admin"] = bool(user.is_admin)
     st.session_state["logged_in"] = True
 
+    db.close()
     return True, "Login successful."
 
 
@@ -85,20 +86,28 @@ def logout():
 
 
 # ---------------------------------------------------------------
-# Get current logged-in user object
+# Get current logged-in user (WITH FIX)
 # ---------------------------------------------------------------
 def current_user():
     if "user_id" not in st.session_state:
         return None
 
     db = SessionLocal()
-    user = db.query(User).filter(User.id == st.session_state["user_id"]).first()
+
+    # EAGER LOAD organization to avoid DetachedInstanceError
+    user = (
+        db.query(User)
+        .options(joinedload(User.organization))  # <--- FIX HERE
+        .filter(User.id == st.session_state["user_id"])
+        .first()
+    )
+
     db.close()
     return user
 
 
 # ---------------------------------------------------------------
-# Admin-only access guard
+# Admin-only guard
 # ---------------------------------------------------------------
 def require_admin():
     if "is_admin" not in st.session_state or not st.session_state["is_admin"]:
