@@ -3,8 +3,6 @@ sqlalchemy
 psycopg2-binary
 bcrypt
 python-dotenv
-openai
 reportlab
 python-docx
-stripe==7.10.0
-stripe 
+requests
