@@ -1,0 +1,65 @@
+/* ============================================================
+   NetDoc AI — Global Dark Mode CSS
+   Premium UI styling (Datadog Inspired)
+   ============================================================ */
+
+body {
+    background-color: #1a1d21 !important;
+    color: #ffffff !important;
+}
+
+.block-container {
+    padding-top: 2rem !important;
+}
+
+.stMarkdown, .stDataFrame, .stTextArea, .stJson, .stDownloadButton {
+    background: #2a2d32 !important;
+    padding: 1rem !important;
+    border-radius: 10px !important;
+}
+
+.stButton>button {
+    background: #4e8cff !important;
+    color: white !important;
+    border-radius: 8px;
+    padding: 0.6rem 1.2rem;
+    font-size: 15px;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.stButton>button:hover {
+    background: #6fa3ff !important;
+}
+
+input {
+    background: #2f3338 !important;
+    color: white !important;
+    border-radius: 6px !important;
+    border: 1px solid #555 !important;
+}
+
+textarea {
+    background: #2f3338 !important;
+    color: white !important;
+    border-radius: 6px !important;
+    border: 1px solid #555 !important;
+}
+
+.stExpander {
+    background-color: #2a2d32 !important;
+    border-radius: 8px !important;
+    padding: 0.6rem !important;
+}
+
+.css-1d391kg, .css-1lcbmhc {
+    background-color: #131518 !important;
+    color: white !important;
+}
+
+.mermaid {
+    background-color: #24272b !important;
+    padding: 1rem !important;
+    border-radius: 8px !important;
+}

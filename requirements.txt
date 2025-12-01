@@ -1,9 +1,10 @@
-bcrypt
+streamlit
+sqlalchemy
 psycopg2-binary
+bcrypt
+python-dotenv
+openai
 reportlab
 python-docx
-fpdf2
-python-dotenv
-sqlalchemy
-pandas
-streamlit
+stripe==7.10.0
+stripe 

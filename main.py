@@ -1,86 +1,164 @@
-# ============================================================
-# NetDoc AI — main.py (FINAL WORKING VERSION)
-# ============================================================
+# ===============================================================
+#  NetDoc AI — Core Engine (Audit + Topology + Export)
+# ===============================================================
 
-from fpdf import FPDF
-from docx import Document
 import json
-import os
-import requests
-
-# Unicode-safe Google font
-FONT_PATH = "NotoSans-Regular.ttf"
-FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf"
-
-# ------------------------------------------------------------
-# Ensure Unicode Font Exists
-# ------------------------------------------------------------
-def ensure_font():
-    if not os.path.exists(FONT_PATH):
-        print("⬇ Downloading NotoSans font...")
-        r = requests.get(FONT_URL)
-        with open(FONT_PATH, "wb") as f:
-            f.write(r.content)
-        print("✔ Unicode font installed!")
-    return True
-
-ensure_font()
+import re
 
 
-# ------------------------------------------------------------
-# SECURITY AUDIT STUB
-# ------------------------------------------------------------
-def run_security_audit(parsed_json):
+# =====================================================================
+#  SECURITY AUDIT ENGINE
+# =====================================================================
+def run_security_audit(config_text: str) -> dict:
+    """
+    Analyze network configuration text and generate a structured audit report.
+    """
+
+    issues = []
+    warnings = []
+    info = []
+
+    # -------------------------------------------------------------
+    # PASSWORD SECURITY CHECK
+    # -------------------------------------------------------------
+    if "username" in config_text and "password" in config_text:
+        if "password 0" in config_text or "password " in config_text:
+            issues.append("⚠️ Plain-text password detected. Use secret 5 or 9 hashing.")
+
+    # -------------------------------------------------------------
+    # VLAN CHECKS
+    # -------------------------------------------------------------
+    vlan_matches = re.findall(r"vlan (\d+)", config_text)
+    if not vlan_matches:
+        warnings.append("No VLANs detected in configuration.")
+    else:
+        info.append(f"Detected VLANs: {', '.join(vlan_matches)}")
+
+    # -------------------------------------------------------------
+    # STP CHECKS
+    # -------------------------------------------------------------
+    if "spanning-tree" not in config_text:
+        warnings.append("STP not found — risky for L2 loops.")
+    else:
+        if "spanning-tree portfast" not in config_text:
+            warnings.append("PortFast missing on access ports.")
+
+    # -------------------------------------------------------------
+    # OSPF CHECKS
+    # -------------------------------------------------------------
+    if "router ospf" in config_text:
+        info.append("OSPF detected.")
+        if "passive-interface default" not in config_text:
+            warnings.append("OSPF passive-interface default not configured.")
+    else:
+        warnings.append("OSPF not found.")
+
+    # -------------------------------------------------------------
+    # BGP CHECKS
+    # -------------------------------------------------------------
+    if "router bgp" in config_text:
+        info.append("BGP detected.")
+        if "neighbor" not in config_text:
+            issues.append("BGP configured but no neighbors found.")
+    else:
+        warnings.append("BGP not found.")
+
+    # -------------------------------------------------------------
+    # ACCESS-LIST CHECKS
+    # -------------------------------------------------------------
+    if "access-list" not in config_text:
+        warnings.append("No ACLs found — verify security posture.")
+
+    # -------------------------------------------------------------
+    # FINAL STRUCTURED REPORT
+    # -------------------------------------------------------------
     return {
-        "summary": "Security audit completed.",
-        "issues": []
+        "issues": issues,
+        "warnings": warnings,
+        "info": info
     }
 
 
-# ------------------------------------------------------------
-# TOPOLOGY STUB
-# ------------------------------------------------------------
-def generate_topology_mermaid(parsed_json):
-    return """
-graph TD
-A[Switch] --> B[Router]
-"""
+# =====================================================================
+#  TOPOLOGY GENERATOR (Mermaid)
+# =====================================================================
+def generate_topology_mermaid(config_text: str) -> str:
+    """
+    Create a Mermaid topology diagram from config.
+    """
+
+    devices = set()
+    links = []
+
+    # Detect hostnames
+    hostname_match = re.search(r"hostname (\S+)", config_text)
+    main_device = hostname_match.group(1) if hostname_match else "Device"
+
+    devices.add(main_device)
+
+    # Basic link detection for CDP/LLDP neighbors
+    neighbor_matches = re.findall(r"neighbor (\S+)", config_text)
+    for n in neighbor_matches:
+        devices.add(n)
+        links.append((main_device, n))
+
+    # Build Mermaid graph
+    mermaid = ["graph TD"]
+
+    for d in devices:
+        mermaid.append(f"    {d}")
+
+    for a, b in links:
+        mermaid.append(f"    {a} --> {b}")
+
+    return "\n".join(mermaid)
 
 
-# ------------------------------------------------------------
-# EXPORT: PDF / DOCX / HTML
-# ------------------------------------------------------------
-def export_all_formats(parsed_json):
-    text = json.dumps(parsed_json, indent=2)
+# =====================================================================
+#  EXPORT ENGINE
+# =====================================================================
+def export_all_formats(audit: dict, topology: str) -> dict:
+    """
+    Export audit + topology into multiple ready formats.
+    """
 
-    # ===================== PDF =====================
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.add_font("Noto", "", FONT_PATH, uni=True)
-    pdf.set_font("Noto", size=12)
+    audit_json = json.dumps(audit, indent=4)
 
-    pdf.multi_cell(0, 8, "NetDoc AI — Network Report\n\n")
-    pdf.multi_cell(0, 6, text)
+    md_content = (
+        "# NetDoc AI — Audit Report\n\n"
+        "## Issues\n"
+        + "\n".join(f"- {i}" for i in audit["issues"]) + "\n\n"
+        "## Warnings\n"
+        + "\n".join(f"- {w}" for w in audit["warnings"]) + "\n\n"
+        "## Info\n"
+        + "\n".join(f"- {i}" for i in audit["info"]) + "\n\n"
+        "## Topology Diagram (Mermaid)\n"
+        "```mermaid\n" + topology + "\n```\n"
+    )
 
-    # Convert to bytes safely (fix for bytearray issue)
-    pdf_output = bytes(pdf.output(dest="S"))
+    txt_content = (
+        "NetDoc AI — Audit Report\n\n"
+        "Issues:\n" + "\n".join(audit["issues"]) + "\n\n"
+        "Warnings:\n" + "\n".join(audit["warnings"]) + "\n\n"
+        "Info:\n" + "\n".join(audit["info"]) + "\n\n"
+        "Topology:\n" + topology + "\n"
+    )
 
-    # ===================== DOCX ====================
-    doc = Document()
-    doc.add_heading("NetDoc AI — Network Report", level=1)
-    doc.add_paragraph(text)
+    html_content = (
+        "<h1>NetDoc AI — Audit Report</h1>"
+        "<h2>Issues</h2><ul>"
+        + "".join(f"<li>{i}</li>" for i in audit["issues"]) +
+        "</ul><h2>Warnings</h2><ul>"
+        + "".join(f"<li>{w}</li>" for w in audit["warnings"]) +
+        "</ul><h2>Info</h2><ul>"
+        + "".join(f"<li>{i}</li>" for i in audit["info"]) +
+        "</ul><h2>Topology Diagram</h2>"
+        f"<pre>{topology}</pre>"
+    )
 
-    docx_path = "report.docx"
-    doc.save(docx_path)
-    with open(docx_path, "rb") as f:
-        docx_output = f.read()
-
-    # ===================== HTML ====================
-    html_output = f"""
-    <html><body>
-    <h1>NetDoc AI — Network Report</h1>
-    <pre>{text}</pre>
-    </body></html>
-    """.encode()
-
-    return pdf_output, docx_output, html_output
+    return {
+        "json": audit_json,
+        "markdown": md_content,
+        "txt": txt_content,
+        "html": html_content
+    }
